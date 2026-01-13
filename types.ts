@@ -58,15 +58,24 @@ export interface ImprovementSuggestion {
   reason: string;
 }
 
+export interface SmartTemplate {
+  name: string;
+  description: string;
+  summary: string;
+  skills: string[];
+}
+
 export interface AppState {
   resume: ResumeData;
   jobDescription: string;
   analysis: ATSAnalysis | null;
   pythonAnalysis: PythonAnalysis | null;
   tailoredBullets: Record<string, TailoredBulletPoint[]>;
-  fieldSuggestions: Record<string, ImprovementSuggestion[]>; // Changed to array
+  fieldSuggestions: Record<string, ImprovementSuggestion[]>;
+  smartTemplates: SmartTemplate[];
   isAnalyzing: boolean;
   isTailoring: boolean;
   isImprovingField: string | null;
+  isGeneratingTemplates: boolean;
   isPythonLoading: boolean;
 }

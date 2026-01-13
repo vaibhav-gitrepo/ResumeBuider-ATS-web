@@ -1,30 +1,46 @@
 
-import React, { useRef } from 'react';
-import { ResumeData, Experience, ImprovementSuggestion, Education } from '../types';
+import React, { useRef, useState } from 'react';
+import { ResumeData, Experience, ImprovementSuggestion, TailoredBulletPoint, SmartTemplate } from '../types';
 
 interface Props {
   data: ResumeData;
-  tailoredBullets: Record<string, any>;
+  tailoredBullets: Record<string, TailoredBulletPoint[]>;
   fieldSuggestions: Record<string, ImprovementSuggestion[]>;
+  smartTemplates: SmartTemplate[];
   onUpdate: (data: ResumeData) => void;
   onTailorExperience: (expId: string, bullets: string[]) => void;
   onImproveField: (fieldName: string, content: string, keyOverride?: string) => void;
   onClearSuggestions?: (key: string) => void;
+  onClearTailored?: (expId: string) => void;
+  onClearTemplates: () => void;
+  onRefineSkills: () => void;
+  onGenerateTemplates: () => void;
   isTailoring: boolean;
   isImprovingField: string | null;
+  isGeneratingTemplates: boolean;
 }
 
 export const ResumeEditor: React.FC<Props> = ({ 
   data, 
+  tailoredBullets,
   fieldSuggestions,
+  smartTemplates,
   onUpdate, 
   onTailorExperience, 
   onImproveField,
   onClearSuggestions,
+  onClearTailored,
+  onClearTemplates,
+  onRefineSkills,
+  onGenerateTemplates,
   isTailoring,
-  isImprovingField
+  isImprovingField,
+  isGeneratingTemplates
 }) => {
   const originalValues = useRef<Record<string, any>>({});
+  const [draggedBullet, setDraggedBullet] = useState<{ expId: string, idx: number } | null>(null);
+  const [dragTargetIdx, setDragTargetIdx] = useState<number | null>(null);
+  const [selectedTemplateIdx, setSelectedTemplateIdx] = useState<number | null>(null);
 
   const handleFieldChange = (field: keyof ResumeData, value: any) => {
     onUpdate({ ...data, [field]: value });
@@ -37,55 +53,68 @@ export const ResumeEditor: React.FC<Props> = ({
     onUpdate({ ...data, experience: newExperience });
   };
 
+  const addExperience = () => {
+    const newExp: Experience = {
+      id: `exp-${Date.now()}`,
+      company: "",
+      role: "",
+      period: "",
+      description: [""]
+    };
+    onUpdate({ ...data, experience: [...data.experience, newExp] });
+  };
+
   const removeExperience = (id: string) => {
     if (confirm("Delete this experience entry?")) {
       onUpdate({ ...data, experience: data.experience.filter(exp => exp.id !== id) });
     }
   };
 
-  const removeEducation = (id: string) => {
-    if (confirm("Delete this education entry?")) {
-      onUpdate({ ...data, education: data.education.filter(edu => edu.id !== id) });
+  const applyTailoredBatch = (expId: string) => {
+    const tailored = tailoredBullets[expId];
+    if (!tailored) return;
+    
+    const newBullets = tailored.map(t => t.improved);
+    handleExperienceChange(expId, 'description', newBullets);
+    if (onClearTailored) onClearTailored(expId);
+  };
+
+  const handleApplySelectedTemplate = () => {
+    if (selectedTemplateIdx === null) return;
+    const template = smartTemplates[selectedTemplateIdx];
+    if (confirm(`Apply the "${template.name}" strategy? This will replace your summary and skills.`)) {
+      onUpdate({
+        ...data,
+        summary: template.summary,
+        skills: template.skills
+      });
+      setSelectedTemplateIdx(null);
+      onClearTemplates();
     }
   };
 
-  const handleEducationChange = (id: string, field: keyof Education, value: string) => {
-    const newEducation = data.education.map(edu => 
-      edu.id === id ? { ...edu, [field]: value } : edu
-    );
-    onUpdate({ ...data, education: newEducation });
-  };
-
   const applySuggestion = (fieldKey: string, suggestedValue: string) => {
-    // Capture original state for revert functionality
     if (!originalValues.current[fieldKey]) {
-      if (fieldKey === 'summary') {
-        originalValues.current[fieldKey] = data.summary;
-      } else if (fieldKey === 'skills') {
-        originalValues.current[fieldKey] = [...data.skills];
-      } else if (fieldKey === 'education') {
-        originalValues.current[fieldKey] = JSON.parse(JSON.stringify(data.education));
-      } else if (fieldKey === 'experience-global') {
-        originalValues.current[fieldKey] = JSON.parse(JSON.stringify(data.experience));
-      } else if (fieldKey.startsWith('exp-entry-')) {
-        const expId = fieldKey.replace('exp-entry-', '');
-        const entry = data.experience.find(e => e.id === expId);
-        if (entry) originalValues.current[fieldKey] = JSON.parse(JSON.stringify(entry));
-      } else if (fieldKey.startsWith('bullet-')) {
+      if (fieldKey === 'summary') originalValues.current[fieldKey] = data.summary;
+      else if (fieldKey === 'skills') originalValues.current[fieldKey] = [...data.skills];
+      else if (fieldKey.startsWith('skill-')) {
+          const originalSkill = fieldKey.replace('skill-', '');
+          originalValues.current[fieldKey] = originalSkill;
+      }
+      else if (fieldKey.startsWith('bullet-')) {
         const [_, expId, idxStr] = fieldKey.split('-');
         const exp = data.experience.find(e => e.id === expId);
         if (exp) originalValues.current[fieldKey] = exp.description[parseInt(idxStr)];
       }
     }
 
-    // Process and Apply the suggestion
     if (fieldKey === 'summary') {
       handleFieldChange('summary', suggestedValue);
-    } else if (fieldKey === 'skills') {
-      const skillsArray = suggestedValue.split(/[,\n]/).map(s => s.trim().replace(/^[-•]\s*/, '')).filter(s => s !== "");
-      handleFieldChange('skills', skillsArray);
+    } else if (fieldKey.startsWith('skill-')) {
+      const originalSkill = fieldKey.replace('skill-', '');
+      const newSkills = data.skills.map(s => s === originalSkill ? suggestedValue : s);
+      handleFieldChange('skills', newSkills);
     } else if (fieldKey.startsWith('bullet-')) {
-      // Individual bullet update
       const [_, expId, idxStr] = fieldKey.split('-');
       const idx = parseInt(idxStr);
       const exp = data.experience.find(e => e.id === expId);
@@ -94,53 +123,33 @@ export const ResumeEditor: React.FC<Props> = ({
         newDesc[idx] = suggestedValue;
         handleExperienceChange(expId, 'description', newDesc);
       }
-    } else if (fieldKey.startsWith('exp-entry-')) {
-      // Batch entry update: Split multi-line suggestions into a new list of bullets
-      const expId = fieldKey.replace('exp-entry-', '');
-      const cleanBullets = suggestedValue
-        .split('\n')
-        .map(line => line.trim().replace(/^[-•*]\s*/, ''))
-        .filter(line => line.length > 0);
-      
-      if (cleanBullets.length > 0) {
-        handleExperienceChange(expId, 'description', cleanBullets);
-      }
     }
 
-    // Keep workspace clean: Collapse the suggestions after choice is applied
-    if (onClearSuggestions) {
-      onClearSuggestions(fieldKey);
-    }
+    if (onClearSuggestions) onClearSuggestions(fieldKey);
   };
 
-  const revertField = (fieldKey: string) => {
-    const original = originalValues.current[fieldKey];
-    if (original === undefined) return;
+  const handleDragStart = (expId: string, idx: number) => {
+    setDraggedBullet({ expId, idx });
+  };
 
-    if (fieldKey === 'summary') {
-      handleFieldChange('summary', original);
-    } else if (fieldKey === 'skills') {
-      handleFieldChange('skills', original);
-    } else if (fieldKey === 'education') {
-      handleFieldChange('education', original);
-    } else if (fieldKey === 'experience-global') {
-      handleFieldChange('experience', original);
-    } else if (fieldKey.startsWith('exp-entry-')) {
-      const expId = fieldKey.replace('exp-entry-', '');
-      const newExperience = data.experience.map(exp => 
-        exp.id === expId ? original : exp
-      );
-      handleFieldChange('experience', newExperience);
-    } else if (fieldKey.startsWith('bullet-')) {
-      const [_, expId, idxStr] = fieldKey.split('-');
-      const exp = data.experience.find(e => e.id === expId);
-      if (exp) {
-        const newDesc = [...exp.description];
-        newDesc[parseInt(idxStr)] = original;
-        handleExperienceChange(expId, 'description', newDesc);
-      }
-    }
-    delete originalValues.current[fieldKey];
+  const handleDragOver = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    if (draggedBullet) setDragTargetIdx(targetIdx);
+  };
+
+  const handleDrop = (expId: string, targetIdx: number) => {
+    setDragTargetIdx(null);
+    if (!draggedBullet || draggedBullet.expId !== expId) return;
+    
+    const exp = data.experience.find(e => e.id === expId);
+    if (!exp) return;
+
+    const newDescription = [...exp.description];
+    const [movedBullet] = newDescription.splice(draggedBullet.idx, 1);
+    newDescription.splice(targetIdx, 0, movedBullet);
+    
+    handleExperienceChange(expId, 'description', newDescription);
+    setDraggedBullet(null);
   };
 
   const SuggestionGrid = ({ fieldKey }: { fieldKey: string }) => {
@@ -148,325 +157,281 @@ export const ResumeEditor: React.FC<Props> = ({
     if (!suggestions) return null;
 
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6 animate-in fade-in slide-in-from-top-4 duration-300">
-        {suggestions.slice(0, 4).map((sug, idx) => (
-          <div key={idx} className="flex flex-col p-5 bg-white border border-indigo-100 rounded-2xl shadow-sm hover:shadow-md transition-all ring-1 ring-slate-100 hover:ring-indigo-300">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[9px] font-black text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded uppercase tracking-tighter">
-                {idx === 0 ? 'Results' : idx === 1 ? 'Skill-ATS' : idx === 2 ? 'Narrative' : 'Action'}
-              </span>
-            </div>
-            <p className="text-xs text-slate-800 font-medium leading-relaxed italic mb-4 flex-grow">"{sug.suggested}"</p>
-            <div className="pt-3 border-t border-slate-50 space-y-3">
-              <p className="text-[10px] text-slate-400 font-medium leading-tight">
-                <strong>Reasoning:</strong> {sug.reason}
-              </p>
-              <button 
-                onClick={() => applySuggestion(fieldKey, sug.suggested)}
-                className="w-full py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl hover:bg-indigo-600 transition-all active:scale-95 shadow-sm"
-              >
-                Apply Change
-              </button>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
+        {suggestions.map((sug, idx) => (
+          <div key={idx} className="flex flex-col p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl hover:shadow-sm transition-all">
+            <p className="text-[11px] text-slate-800 font-bold mb-2">"{sug.suggested}"</p>
+            <p className="text-[9px] text-indigo-600 font-medium mb-3">{sug.reason}</p>
+            <button 
+              onClick={() => applySuggestion(fieldKey, sug.suggested)}
+              className="w-full py-1.5 bg-indigo-600 text-white text-[10px] font-black rounded-lg hover:bg-indigo-700 transition-all"
+            >
+              Apply Change
+            </button>
           </div>
         ))}
       </div>
     );
   };
 
-  const MagicWandIcon = () => (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-    </svg>
-  );
-
-  const UndoIcon = () => (
-    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-    </svg>
-  );
-
   return (
     <div className="space-y-12 bg-white p-6 md:p-12 rounded-[2.5rem] shadow-2xl border border-slate-200">
-      {/* Name/Contact Header */}
+      {/* Smart Templates Section */}
+      {smartTemplates.length > 0 && (
+        <section className="bg-slate-50 p-8 rounded-[2rem] border border-slate-200 animate-in slide-in-from-top-4 duration-500">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">AI Persona Templates</h3>
+              <p className="text-[10px] text-slate-500 mt-1">Select a template to view the suggested strategy.</p>
+            </div>
+            <button 
+              onClick={onGenerateTemplates}
+              disabled={isGeneratingTemplates}
+              className="px-4 py-2 bg-white text-slate-600 text-[10px] font-black rounded-xl border border-slate-200 hover:bg-slate-50 transition-all shadow-sm"
+            >
+              {isGeneratingTemplates ? 'Analyzing...' : 'Refresh'}
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {smartTemplates.map((template, idx) => {
+              const isSelected = selectedTemplateIdx === idx;
+              return (
+                <div 
+                  key={idx} 
+                  onClick={() => setSelectedTemplateIdx(idx)}
+                  className={`relative cursor-pointer p-6 rounded-2xl border-2 transition-all flex flex-col h-full ${
+                    isSelected 
+                    ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-[1.03] ring-4 ring-indigo-100' 
+                    : 'bg-white border-slate-200 hover:border-indigo-300 text-slate-800 hover:shadow-md'
+                  }`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className={`font-black text-sm ${isSelected ? 'text-white' : 'text-slate-800'}`}>{template.name}</h4>
+                    {isSelected && (
+                      <div className="bg-white/20 p-1 rounded-full">
+                        <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  <p className={`text-[10px] leading-relaxed ${isSelected ? 'text-indigo-100' : 'text-slate-400'}`}>{template.description}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {selectedTemplateIdx !== null && (
+            <button 
+              onClick={handleApplySelectedTemplate}
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 hover:-translate-y-1 transition-all flex items-center justify-center gap-3 animate-in fade-in zoom-in duration-300"
+            >
+              Apply Strategy to Resume
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+        </section>
+      )}
+
+      {/* Placeholder when no templates exist */}
+      {smartTemplates.length === 0 && !isGeneratingTemplates && (
+        <div className="text-center py-6 border-2 border-dashed border-slate-100 rounded-[2rem]">
+          <button 
+            onClick={onGenerateTemplates}
+            className="text-[10px] font-black text-indigo-400 hover:text-indigo-600 uppercase tracking-widest"
+          >
+            + Generate AI Persona Strategy
+          </button>
+        </div>
+      )}
+
+      {/* Header Info */}
       <div className="border-b border-slate-100 pb-10 grid grid-cols-1 md:grid-cols-2 gap-8">
         <div className="space-y-4">
           <input 
-            className="text-5xl font-black text-slate-900 w-full border-b border-transparent hover:border-slate-200 focus:border-indigo-500 outline-none transition-all placeholder:text-slate-200"
+            className="text-4xl font-black text-slate-900 w-full border-b border-transparent focus:border-indigo-500 outline-none transition-all"
             value={data.fullName}
             onChange={(e) => handleFieldChange('fullName', e.target.value)}
             placeholder="Your Full Name"
           />
-          <div className="flex flex-wrap gap-8 text-sm text-slate-500 font-medium">
-            <input 
-              className="border-b border-transparent hover:border-slate-200 focus:border-indigo-500 outline-none bg-transparent"
-              value={data.email}
-              onChange={(e) => handleFieldChange('email', e.target.value)}
-              placeholder="Email Address"
-            />
-            <input 
-              className="border-b border-transparent hover:border-slate-200 focus:border-indigo-500 outline-none bg-transparent"
-              value={data.phone}
-              onChange={(e) => handleFieldChange('phone', e.target.value)}
-              placeholder="Phone Number"
-            />
+          <div className="flex flex-wrap gap-6 text-sm">
+            <input className="bg-transparent border-b border-transparent focus:border-indigo-400 outline-none w-48" value={data.email} onChange={(e) => handleFieldChange('email', e.target.value)} placeholder="Email" />
+            <input className="bg-transparent border-b border-transparent focus:border-indigo-400 outline-none w-48" value={data.phone} onChange={(e) => handleFieldChange('phone', e.target.value)} placeholder="Phone" />
           </div>
         </div>
       </div>
 
-      {/* Professional Summary */}
+      {/* Summary */}
       <section>
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center gap-4">
-            <h3 className="text-xl font-black text-slate-800 border-l-4 border-indigo-600 pl-4 uppercase tracking-widest">Professional Summary</h3>
-            {originalValues.current['summary'] && (
-              <button onClick={() => revertField('summary')} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-lg border border-amber-100 hover:bg-amber-100 transition-all shadow-sm">
-                <UndoIcon /> Revert
-              </button>
-            )}
-          </div>
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Professional Summary</h3>
           <button 
             onClick={() => onImproveField('summary', data.summary)}
             disabled={isImprovingField === 'summary'}
-            className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-2xl text-xs font-black hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg"
+            className="text-[10px] font-black text-indigo-600 hover:text-indigo-800"
           >
-            {isImprovingField === 'summary' ? 'Improving...' : <><MagicWandIcon /> AI Improve Section</>}
+            {isImprovingField === 'summary' ? 'Improving...' : 'AI Improve'}
           </button>
         </div>
         <textarea
-          rows={5}
-          className="w-full text-slate-700 text-sm leading-relaxed border border-slate-100 hover:border-slate-300 focus:border-indigo-400 p-6 rounded-3xl outline-none resize-none transition-all shadow-inner bg-slate-50/50 focus:bg-white"
+          rows={4}
+          className="w-full text-sm text-slate-700 bg-slate-50 p-4 rounded-xl border border-slate-100 outline-none focus:bg-white focus:border-indigo-300 transition-all"
           value={data.summary}
           onChange={(e) => handleFieldChange('summary', e.target.value)}
-          placeholder="Craft a high-impact summary..."
         />
         <SuggestionGrid fieldKey="summary" />
       </section>
 
       {/* Experience */}
       <section className="space-y-10">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <h3 className="text-xl font-black text-slate-800 border-l-4 border-indigo-600 pl-4 uppercase tracking-widest">Experience</h3>
-            {originalValues.current['experience-global'] && (
-              <button onClick={() => revertField('experience-global')} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-lg border border-amber-100 hover:bg-amber-100 shadow-sm"><UndoIcon /> Revert All</button>
-            )}
-          </div>
-          <button 
-            onClick={() => onImproveField('experience overview', JSON.stringify(data.experience), 'experience-global')}
-            disabled={isImprovingField === 'experience-global'}
-            className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-2xl text-xs font-black hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg"
-          >
-            {isImprovingField === 'experience-global' ? 'Analyzing...' : <><MagicWandIcon /> AI Improve Overview</>}
-          </button>
-        </div>
-        
-        <SuggestionGrid fieldKey="experience-global" />
-
-        {data.experience.map((exp) => {
-          const entryKey = `exp-entry-${exp.id}`;
-          const isEntryImproving = isImprovingField === entryKey;
-
-          return (
-            <div key={exp.id} className="relative bg-slate-50/30 p-8 rounded-[2rem] border border-slate-100 hover:border-indigo-200 transition-all shadow-sm">
-              <div className="flex flex-wrap justify-between items-start gap-6 mb-10">
-                <div className="flex-1 space-y-2">
-                  <input 
-                    className="font-black text-slate-900 bg-transparent outline-none w-full text-2xl placeholder:text-slate-200"
-                    value={exp.role}
-                    onChange={(e) => handleExperienceChange(exp.id, 'role', e.target.value)}
-                    placeholder="Your Role Title"
-                  />
-                  <input 
-                    className="text-indigo-600 text-lg font-bold bg-transparent outline-none w-full placeholder:text-indigo-100"
-                    value={exp.company}
-                    onChange={(e) => handleExperienceChange(exp.id, 'company', e.target.value)}
-                    placeholder="Organization / Company"
-                  />
+        <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Experience</h3>
+        {data.experience.map((exp) => (
+          <div key={exp.id} className="relative bg-slate-50/30 p-8 rounded-[2rem] border border-slate-100 group">
+             <div className="flex justify-between items-start mb-6">
+                <div className="flex-grow space-y-2">
+                   <input className="block w-full text-xl font-black text-slate-800 bg-transparent outline-none" value={exp.role} onChange={(e) => handleExperienceChange(exp.id, 'role', e.target.value)} placeholder="Role Title" />
+                   <input className="block w-full text-sm font-bold text-indigo-600 bg-transparent outline-none" value={exp.company} onChange={(e) => handleExperienceChange(exp.id, 'company', e.target.value)} placeholder="Company" />
                 </div>
-                <div className="flex flex-col items-end gap-3">
-                  <div className="flex items-center gap-2">
-                    <input 
-                      className="text-xs text-slate-400 font-mono bg-white/50 px-3 py-1.5 rounded-lg border border-slate-100 outline-none text-right"
-                      value={exp.period}
-                      onChange={(e) => handleExperienceChange(exp.id, 'period', e.target.value)}
-                      placeholder="Period"
-                    />
-                    <button onClick={() => removeExperience(exp.id)} className="text-slate-300 hover:text-red-500 p-2.5 bg-white rounded-xl shadow-sm border border-slate-100 transition-colors">
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => onImproveField('experience achievements', exp.description.join('\n'), entryKey)}
-                      disabled={isEntryImproving}
-                      className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-black text-indigo-600 bg-white border border-indigo-100 hover:bg-indigo-50 rounded-xl shadow-sm"
-                    >
-                      {isEntryImproving ? '...' : <><MagicWandIcon /> AI Improve Entry</>}
-                    </button>
-                    {originalValues.current[entryKey] && (
-                      <button onClick={() => revertField(entryKey)} className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-black text-amber-600 bg-white border border-amber-100 hover:bg-amber-50 rounded-xl shadow-sm"><UndoIcon /> Revert Entry</button>
-                    )}
-                  </div>
+                <div className="flex flex-col items-end gap-2">
+                   <input className="text-xs text-slate-400 font-mono bg-transparent outline-none text-right" value={exp.period} onChange={(e) => handleExperienceChange(exp.id, 'period', e.target.value)} placeholder="Period" />
+                   <button onClick={() => removeExperience(exp.id)} className="text-slate-300 hover:text-red-500 transition-colors"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg></button>
+                </div>
+             </div>
+
+             <ul className="space-y-2">
+               {exp.description.map((bullet, idx) => {
+                 const bulletKey = `bullet-${exp.id}-${idx}`;
+                 const isDragging = draggedBullet?.idx === idx && draggedBullet?.expId === exp.id;
+                 const isTarget = dragTargetIdx === idx && draggedBullet?.expId === exp.id;
+                 
+                 return (
+                   <li 
+                    key={idx} 
+                    draggable
+                    onDragStart={() => handleDragStart(exp.id, idx)}
+                    onDragOver={(e) => handleDragOver(e, idx)}
+                    onDrop={() => handleDrop(exp.id, idx)}
+                    className={`flex flex-col gap-2 p-2 rounded-xl border-2 transition-all duration-200 ${isDragging ? 'opacity-20 bg-indigo-50 border-indigo-200' : 'border-transparent'} ${isTarget ? 'border-t-indigo-400 bg-indigo-50/20' : ''} hover:bg-white hover:border-slate-100 cursor-grab active:cursor-grabbing`}
+                   >
+                      <div className="flex gap-3 group/bullet items-start">
+                        <div className="mt-2.5 flex flex-col items-center gap-0.5 shrink-0 opacity-20 group-hover/bullet:opacity-100 transition-opacity">
+                          <div className="h-1 w-1 rounded-full bg-slate-900" />
+                          <div className="h-1 w-1 rounded-full bg-slate-900" />
+                          <div className="h-1 w-1 rounded-full bg-slate-900" />
+                        </div>
+                        <textarea 
+                          rows={2} 
+                          className="flex-grow bg-transparent text-sm text-slate-600 border-b border-transparent focus:border-indigo-200 outline-none resize-none leading-relaxed"
+                          value={bullet}
+                          onChange={(e) => {
+                            const newDesc = [...exp.description];
+                            newDesc[idx] = e.target.value;
+                            handleExperienceChange(exp.id, 'description', newDesc);
+                          }}
+                        />
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => onImproveField('experience bullet', bullet, bulletKey)}
+                            disabled={isImprovingField === bulletKey}
+                            className="opacity-0 group-hover/bullet:opacity-100 text-[9px] font-black text-indigo-400 hover:text-indigo-600 transition-all uppercase px-2 py-1 rounded-lg hover:bg-indigo-50"
+                          >
+                            {isImprovingField === bulletKey ? '...' : 'Tailor'}
+                          </button>
+                        </div>
+                      </div>
+                      <SuggestionGrid fieldKey={bulletKey} />
+                   </li>
+                 );
+               })}
+             </ul>
+
+             {tailoredBullets[exp.id] && (
+               <div className="mt-6 p-6 bg-emerald-50 border-2 border-emerald-100 rounded-2xl animate-in zoom-in-95 duration-300">
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="text-xs font-black text-emerald-700 uppercase tracking-widest">AI Tailored Content Ready</h4>
+                  <button 
+                    onClick={() => applyTailoredBatch(exp.id)}
+                    className="px-4 py-2 bg-emerald-600 text-white text-[10px] font-black rounded-xl hover:bg-emerald-700 transition-all shadow-md"
+                  >
+                    Apply All
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  {tailoredBullets[exp.id].map((item, i) => (
+                    <div key={i} className="text-[11px] text-emerald-900 border-l-2 border-emerald-200 pl-3">
+                      <p className="font-bold leading-relaxed mb-1">Improved: {item.improved}</p>
+                      <p className="text-[9px] text-emerald-600 italic">Reason: {item.reasoning}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
+             )}
 
-              <SuggestionGrid fieldKey={entryKey} />
-
-              <ul className="space-y-12 ml-4 mt-8">
-                {exp.description.map((bullet, idx) => {
-                  const bulletKey = `bullet-${exp.id}-${idx}`;
-                  const isBulletImproving = isImprovingField === bulletKey;
-
-                  return (
-                    <li key={idx} className="group relative pl-8">
-                      <div className="absolute left-0 top-4 w-2 h-2 rounded-full bg-indigo-200 group-hover:bg-indigo-600 transition-all ring-4 ring-transparent group-hover:ring-indigo-50" />
-                      <div className="flex flex-col gap-4">
-                        <div className="flex gap-4 items-start">
-                          <textarea
-                            rows={2}
-                            className="flex-grow p-4 text-sm text-slate-700 bg-white border border-slate-100 hover:border-indigo-200 focus:border-indigo-500 rounded-2xl transition-all resize-none outline-none shadow-sm"
-                            value={bullet}
-                            onChange={(e) => {
-                              const newDesc = [...exp.description];
-                              newDesc[idx] = e.target.value;
-                              handleExperienceChange(exp.id, 'description', newDesc);
-                            }}
-                            placeholder="Describe a key achievement..."
-                          />
-                          <div className="flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
-                            <button 
-                              onClick={() => onImproveField('experience bullet', bullet, bulletKey)}
-                              disabled={isBulletImproving || !bullet}
-                              className="flex items-center gap-2 px-4 py-2 text-[10px] font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl shadow-sm transition-all"
-                            >
-                              {isBulletImproving ? '...' : <><MagicWandIcon /> AI Improve Bullet</>}
-                            </button>
-                            {originalValues.current[bulletKey] && (
-                              <button onClick={() => revertField(bulletKey)} className="flex items-center gap-2 px-4 py-2 text-[10px] font-black text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-xl shadow-sm transition-all"><UndoIcon /> Undo</button>
-                            )}
-                            <button onClick={() => {
-                                const newDesc = exp.description.filter((_, i) => i !== idx);
-                                handleExperienceChange(exp.id, 'description', newDesc);
-                              }} className="flex items-center gap-2 px-4 py-2 text-[10px] font-black text-slate-300 hover:text-red-500 bg-white border border-slate-100 rounded-xl shadow-sm transition-all">
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg> Delete
-                            </button>
-                          </div>
-                        </div>
-                        <SuggestionGrid fieldKey={bulletKey} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-
-              <div className="mt-12 pt-8 border-t border-slate-100 flex justify-between gap-4">
-                <button onClick={() => {
-                  const newDesc = [...exp.description, ""];
-                  handleExperienceChange(exp.id, 'description', newDesc);
-                }} className="flex items-center gap-2 px-6 py-3 bg-slate-900 text-white rounded-2xl text-xs font-black hover:bg-black transition-all shadow-xl active:scale-95">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-                  Add Achievement
+             <div className="mt-8 pt-6 border-t border-slate-100 flex gap-4">
+                <button 
+                  onClick={() => handleExperienceChange(exp.id, 'description', [...exp.description, ""])}
+                  className="text-[10px] font-black text-slate-400 hover:text-indigo-600"
+                >
+                  + Add Point
                 </button>
                 <button 
                   onClick={() => onTailorExperience(exp.id, exp.description)}
-                  disabled={isTailoring || exp.description.length === 0}
-                  className="flex items-center gap-3 px-6 py-3 bg-indigo-50 text-indigo-700 rounded-2xl text-xs font-black hover:bg-indigo-100 transition-all border border-indigo-100"
+                  disabled={isTailoring}
+                  className="px-4 py-2 bg-indigo-50 text-indigo-700 text-[10px] font-black rounded-xl hover:bg-indigo-100 transition-all"
                 >
-                  {isTailoring ? 'Processing...' : <><MagicWandIcon /> Batch Tailor All Bullets</>}
+                  {isTailoring ? 'Processing...' : 'Tailor All Bullets'}
                 </button>
-              </div>
-            </div>
-          );
-        })}
+             </div>
+          </div>
+        ))}
+
+        <button 
+          onClick={addExperience}
+          className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 text-xs font-black hover:border-indigo-400 hover:text-indigo-600 transition-all flex items-center justify-center gap-2"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+          Add Work Section
+        </button>
       </section>
 
       {/* Skills */}
-      <section className="space-y-8">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <h3 className="text-xl font-black text-slate-800 border-l-4 border-indigo-600 pl-4 uppercase tracking-widest">Skills</h3>
-            {originalValues.current['skills'] && (
-              <button onClick={() => revertField('skills')} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-lg border border-amber-100 hover:bg-amber-100 shadow-sm"><UndoIcon /> Revert</button>
-            )}
-          </div>
-          <div className="flex gap-4">
-            <button 
-              onClick={() => onImproveField('skills', data.skills.join(', '))}
-              disabled={isImprovingField === 'skills'}
-              className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-2xl text-xs font-black hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg"
-            >
-              {isImprovingField === 'skills' ? 'Updating...' : <><MagicWandIcon /> AI Improve Section</>}
-            </button>
-            <button onClick={() => handleFieldChange('skills', [...data.skills, 'New Skill'])} className="text-xs font-black text-indigo-600 bg-white border border-indigo-100 px-6 py-2.5 rounded-2xl hover:bg-indigo-50 shadow-sm">+ Add Skill</button>
-          </div>
+      <section>
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">Technical Skills</h3>
+          <button 
+            onClick={onRefineSkills}
+            disabled={isImprovingField === 'skills'}
+            className="px-4 py-2 bg-indigo-600 text-white text-[10px] font-black rounded-xl hover:bg-indigo-700 transition-all shadow-md"
+          >
+            {isImprovingField === 'skills' ? 'Standardizing...' : 'AI Concise Refinement'}
+          </button>
         </div>
 
-        <SuggestionGrid fieldKey="skills" />
-
-        <div className="flex flex-wrap gap-4">
-          {data.skills.map((skill, i) => (
-            <div key={i} className="group flex items-center gap-3 px-5 py-2.5 bg-white text-slate-800 rounded-2xl text-sm font-bold border border-slate-200 hover:border-indigo-400 hover:shadow-md transition-all">
-              <input 
-                className="bg-transparent outline-none w-32 focus:w-48 transition-all"
-                value={skill}
-                onChange={(e) => {
-                  const newSkills = [...data.skills];
-                  newSkills[i] = e.target.value;
-                  handleFieldChange('skills', newSkills);
-                }}
-              />
-              <button onClick={() => handleFieldChange('skills', data.skills.filter((_, idx) => idx !== i))} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all">
-                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Education */}
-      <section className="space-y-8">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <h3 className="text-xl font-black text-slate-800 border-l-4 border-indigo-600 pl-4 uppercase tracking-widest">Education</h3>
-            {originalValues.current['education'] && (
-              <button onClick={() => revertField('education')} className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-600 text-[10px] font-bold rounded-lg border border-amber-100 hover:bg-amber-100 shadow-sm"><UndoIcon /> Revert</button>
-            )}
-          </div>
-          <div className="flex gap-4">
-            <button 
-              onClick={() => onImproveField('education', JSON.stringify(data.education))}
-              disabled={isImprovingField === 'education'}
-              className="flex items-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-2xl text-xs font-black hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg"
-            >
-              {isImprovingField === 'education' ? 'Analyzing...' : <><MagicWandIcon /> AI Improve Section</>}
-            </button>
-            <button onClick={() => handleFieldChange('education', [...data.education, { id: Date.now().toString(), degree: '', institution: '', year: '' }])} className="text-xs font-black text-indigo-600 bg-white border border-indigo-100 px-6 py-2.5 rounded-2xl hover:bg-indigo-50 shadow-sm">+ Add Degree</button>
-          </div>
-        </div>
-
-        <SuggestionGrid fieldKey="education" />
-
-        <div className="space-y-6">
-          {data.education.map((edu) => (
-            <div key={edu.id} className="relative group p-8 bg-slate-50/30 rounded-[2rem] border border-slate-100 hover:border-indigo-200 transition-all">
-               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Degree</span>
-                    <input className="font-black text-slate-900 bg-transparent outline-none text-base border-b-2 border-transparent focus:border-indigo-400" value={edu.degree} onChange={(e) => handleEducationChange(edu.id, 'degree', e.target.value)} placeholder="Degree" />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Institution</span>
-                    <input className="text-slate-600 font-bold bg-transparent outline-none text-base border-b-2 border-transparent focus:border-indigo-400" value={edu.institution} onChange={(e) => handleEducationChange(edu.id, 'institution', e.target.value)} placeholder="University" />
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-slate-400 uppercase font-black tracking-widest text-right">Year</span>
-                    <input className="text-slate-500 bg-transparent outline-none text-base text-right border-b-2 border-transparent focus:border-indigo-400" value={edu.year} onChange={(e) => handleEducationChange(edu.id, 'year', e.target.value)} placeholder="YYYY" />
-                  </div>
-               </div>
-               <button onClick={() => removeEducation(edu.id)} className="absolute -top-3 -right-3 opacity-0 group-hover:opacity-100 p-3 text-slate-300 hover:text-red-500 bg-white rounded-2xl shadow-xl border border-slate-100 transition-all"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg></button>
-            </div>
-          ))}
+        <div className="flex flex-wrap gap-3">
+          {data.skills.map((skill, i) => {
+            const skillKey = `skill-${skill}`;
+            return (
+              <div key={i} className="flex flex-col gap-2">
+                <div className="group flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-300 hover:bg-white transition-all shadow-sm">
+                  <input 
+                    className="bg-transparent outline-none w-24" 
+                    value={skill} 
+                    onChange={(e) => {
+                      const newSkills = [...data.skills];
+                      newSkills[i] = e.target.value;
+                      handleFieldChange('skills', newSkills);
+                    }}
+                  />
+                  <button onClick={() => handleFieldChange('skills', data.skills.filter((_, idx) => idx !== i))} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all"><svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg></button>
+                </div>
+                <SuggestionGrid fieldKey={skillKey} />
+              </div>
+            );
+          })}
+          <button onClick={() => handleFieldChange('skills', [...data.skills, 'New Skill'])} className="px-4 py-2 border-2 border-dashed border-slate-200 rounded-xl text-slate-300 hover:border-indigo-200 hover:text-indigo-500 transition-all text-xs font-bold">+ New Skill</button>
         </div>
       </section>
     </div>
